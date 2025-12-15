@@ -1,10 +1,20 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Lock orientation to portrait on mobile (Android/iOS), keep flexible on web/desktop.
+  if (!kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS)) {
+    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  }
+
   runApp(const RunnerApp());
 }
 
@@ -40,6 +50,10 @@ class _GamePageState extends State<GamePage> {
   static const double _playerBaseHeight = 0.14;
   static const double _obstacleWidth = 0.06;
   static const double _obstacleHeight = 0.16;
+  // Small per-sprite visual offsets to align feet/bottoms on the ground line.
+  // Tuned as a fraction of screen height.
+  static const double _playerBottomOffsetFactor = 0.0;
+  static const double _ghostBottomOffsetFactor = 0.0;
 
   static const double _gravity = 5.0; // downward, in fraction/s^2
   static const double _shortJumpVelocity = -2.0; // upward, small jump
@@ -182,7 +196,8 @@ class _GamePageState extends State<GamePage> {
       return;
     }
 
-    _jump(_highJumpVelocity);
+    // Use the same jump strength as a single space press (smaller jump).
+    _jump(_shortJumpVelocity);
   }
 
   void _handleSpaceJump({required bool high}) {
@@ -212,136 +227,166 @@ class _GamePageState extends State<GamePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RawKeyboardListener(
-        focusNode: _focusNode,
-        onKey: (event) {
-          if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
-            final int now = DateTime.now().millisecondsSinceEpoch;
-            final int? last = _lastSpaceDownMs;
-            final bool isDouble = last != null && (now - last) <= _doublePressThresholdMs;
-            _lastSpaceDownMs = now;
-            _handleSpaceJump(high: isDouble);
-          }
-        },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _handleTap,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final double width = constraints.maxWidth;
-              final double height = constraints.maxHeight;
+      body: SafeArea(
+        child: RawKeyboardListener(
+          focusNode: _focusNode,
+          onKey: (event) {
+            if (event is RawKeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+              final int now = DateTime.now().millisecondsSinceEpoch;
+              final int? last = _lastSpaceDownMs;
+              final bool isDouble = last != null && (now - last) <= _doublePressThresholdMs;
+              _lastSpaceDownMs = now;
+              _handleSpaceJump(high: isDouble);
+            }
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _handleTap,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final double width = constraints.maxWidth;
+                final double height = constraints.maxHeight;
 
-              // Convert logical units to pixels.
-              final double groundPixelY = height * _groundY;
-              final double groundHeight = height - groundPixelY;
+                // Convert logical units to pixels.
+                final double groundPixelY = height * _groundY;
+                final double groundHeight = height - groundPixelY;
 
-              final double playerPixelWidth = width * _playerWidth;
-              final double playerPixelHeight = height * _playerHeight;
-              final double playerCenterX = width * _playerX;
-              final double playerBottomY = height * _playerY;
+                final double playerPixelWidth = width * _playerWidth;
+                final double playerPixelHeight = height * _playerHeight;
+                final double playerCenterX = width * _playerX;
+                final double playerBottomY = height * _playerY;
 
-              final double obstaclePixelWidth = width * _currentObstacleWidth;
-              final double obstaclePixelHeight = height * _currentObstacleHeight;
-              final double obstacleLeftX = width * _obstacleX;
-              final double obstacleBottomY = groundPixelY;
+                final double obstaclePixelWidth = width * _currentObstacleWidth;
+                final double obstaclePixelHeight = height * _currentObstacleHeight;
+                final double obstacleLeftX = width * _obstacleX;
+                final double obstacleBottomY = groundPixelY;
 
-              return Stack(
-                children: [
-                  // Background image.
-                  Positioned.fill(child: Image.asset('assets/background.jpg', fit: BoxFit.cover)),
+                // Visual bottoms allow us to compensate for transparent padding
+                // in the PNGs so the feet/bases sit on the same ground line.
+                final double playerVisualBottom =
+                    playerBottomY - height * _playerBottomOffsetFactor;
+                final double ghostVisualBottom =
+                    obstacleBottomY - height * _ghostBottomOffsetFactor;
 
-                  // Ground overlay to keep a clear horizon.
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: groundPixelY,
-                    height: groundHeight,
-                    child: Container(color: Colors.black.withOpacity(0.35)),
-                  ),
+                // Responsive HUD sizing for mobile and web.
+                final double hudTop = height * 0.04;
+                final double scoreFontSize = width * 0.06;
+                final double hudTitleFontSize = width * 0.045;
+                final double hudDetailFontSize = width * 0.032;
+                final bool isWeb = kIsWeb;
 
-                  // Runner character.
-                  Positioned(
-                    left: playerCenterX - playerPixelWidth / 2,
-                    top: playerBottomY - playerPixelHeight,
-                    width: playerPixelWidth,
-                    height: playerPixelHeight,
-                    child: Image.asset('assets/game_character.png', fit: BoxFit.contain),
-                  ),
+                return Stack(
+                  children: [
+                    // Background image.
+                    Positioned.fill(child: Image.asset('assets/background.jpg', fit: BoxFit.cover)),
 
-                  // Ghost obstacle.
-                  Positioned(
-                    left: obstacleLeftX,
-                    top: obstacleBottomY - obstaclePixelHeight,
-                    width: obstaclePixelWidth,
-                    height: obstaclePixelHeight,
-                    child: Image.asset('assets/ghost.png', fit: BoxFit.contain),
-                  ),
-                  Positioned(
-                    top: 40,
-                    left: 24,
-                    child: Text(
-                      'Score: $_score',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
+                    // Ground overlay to keep a clear horizon.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: groundPixelY,
+                      height: groundHeight,
+                      child: Container(color: Colors.black.withOpacity(0.35)),
+                    ),
+
+                    // Runner character.
+                    Positioned(
+                      left: playerCenterX - playerPixelWidth / 2,
+                      top: playerVisualBottom - playerPixelHeight,
+                      width: playerPixelWidth,
+                      height: playerPixelHeight,
+                      child: Image.asset('assets/game_character.png', fit: BoxFit.contain),
+                    ),
+
+                    // Ghost obstacle.
+                    Positioned(
+                      left: obstacleLeftX,
+                      top: ghostVisualBottom - obstaclePixelHeight,
+                      width: obstaclePixelWidth,
+                      height: obstaclePixelHeight,
+                      child: Image.asset('assets/ghost.png', fit: BoxFit.contain),
+                    ),
+
+                    // Score.
+                    Positioned(
+                      top: hudTop,
+                      left: 24,
+                      child: Text(
+                        'Score: $_score',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: scoreFontSize.clamp(16, 28),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    top: 40,
-                    right: 24,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: const [
-                        Text(
-                          'Tap / Space to jump',
-                          style: TextStyle(color: Colors.white70, fontSize: 14),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          'Single space: small jump  |  Double space: high jump',
-                          style: TextStyle(color: Colors.white38, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_isGameOver)
-                    Center(
+
+                    // Controls hint (different for mobile vs web/desktop).
+                    Positioned(
+                      top: hudTop,
+                      right: 24,
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          const Text(
-                            'Game Over',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
                           Text(
-                            'Score: $_score',
-                            style: const TextStyle(color: Colors.white70, fontSize: 18),
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: Colors.white70),
+                            isWeb ? 'Tap / Space to jump' : 'Tap to jump',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: hudTitleFontSize.clamp(12, 18),
                             ),
-                            child: const Text(
-                              'Tap anywhere to restart',
-                              style: TextStyle(color: Colors.white70, fontSize: 14),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            isWeb
+                                ? 'Single space: small | Double: high jump'
+                                : 'Avoid the ghost and survive',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: hudDetailFontSize.clamp(10, 14),
                             ),
                           ),
                         ],
                       ),
                     ),
-                ],
-              );
-            },
+
+                    // Game over overlay.
+                    if (_isGameOver)
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'Game Over',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Score: $_score',
+                              style: const TextStyle(color: Colors.white70, fontSize: 18),
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white70),
+                              ),
+                              child: const Text(
+                                'Tap anywhere to restart',
+                                style: TextStyle(color: Colors.white70, fontSize: 14),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
